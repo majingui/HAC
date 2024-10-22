@@ -129,7 +129,7 @@ def build_scaling_rotation(s, r):
     L = R @ L
     return L
 
-def safe_state(silent):
+def safe_state(silent): # 用一个F流替换标准输出流，其新流会在输出的时候加上时间戳。
     old_f = sys.stdout
     class F:
         def __init__(self, silent):

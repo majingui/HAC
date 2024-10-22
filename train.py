@@ -652,11 +652,11 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     args.port = np.random.randint(10000, 20000)
     # network_gui.init(args.ip, args.port)
-    torch.autograd.set_detect_anomaly(args.detect_anomaly)
+    torch.autograd.set_detect_anomaly(args.detect_anomaly) # 这行代码的作用是控制PyTorch在进行自动梯度计算时是否进行异常检测。
 
     # training
     x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb, logger)
-    if args.warmup:
+    if args.warmup: # 不是从0开始训
         logger.info("\n Warmup finished! Reboot from last checkpoints")
         new_ply_path = os.path.join(args.model_path, f'point_cloud/iteration_{args.iterations}', 'point_cloud.ply')
         x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path)
