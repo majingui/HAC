@@ -1001,6 +1001,7 @@ class GaussianModel(nn.Module):
                 'encoding_xyz': self.encoding_xyz.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
+                'feat_predict': self.feat_predict.state_dict()
             }, path)
         else:
             torch.save({
@@ -1010,6 +1011,7 @@ class GaussianModel(nn.Module):
                 'encoding_xyz': self.encoding_xyz.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
+                'feat_predict': self.feat_predict.state_dict()
             }, path)
 
 
@@ -1023,6 +1025,7 @@ class GaussianModel(nn.Module):
         self.encoding_xyz.load_state_dict(checkpoint['encoding_xyz'])
         self.mlp_grid.load_state_dict(checkpoint['grid_mlp'])
         self.mlp_deform.load_state_dict(checkpoint['deform_mlp'])
+        self.feat_predict.load_state_dict(checkpoint['feat_predict'])
 
     def contract_to_unisphere(self,
         x: torch.Tensor,
