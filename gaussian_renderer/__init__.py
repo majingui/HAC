@@ -47,6 +47,9 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     Q_feat = 1
     Q_scaling = 0.001
     Q_offsets = 0.2
+
+    feat_context = None
+
     if is_training:
         if step > 3000 and step <= 10000:
             # quantization
@@ -59,9 +62,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
         if step > 10000:
             feat_context = pc.calc_interp_feat(anchor)
-            feat_context = pc.get_grid_mlp(feat_context)
             mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-                torch.split(feat_context, split_size_or_sections=[pc.feat_dim, pc.feat_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
+                torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim, pc.feat_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
 
             Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
             Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
@@ -129,7 +131,12 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             feat[:, ::1, :1]*bank_weight[:, :, 2:]
         feat = feat.squeeze(dim=-1)  # [N_visible_anchor, 32]
 
-    cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1)  # [N_visible_anchor, 32+3+1]
+    if feat_context is not None:
+        full_feat = pc.get_feat_predict(feat_context) + feat
+    else:
+        full_feat = feat
+
+    cat_local_view = torch.cat([full_feat, ob_view, ob_dist], dim=1)  # [N_visible_anchor, 32+3+1]
 
     neural_opacity = pc.get_opacity_mlp(cat_local_view)  # [N_visible_anchor, K]
     neural_opacity = neural_opacity.reshape([-1, 1])  # [N_visible_anchor*K, 1]

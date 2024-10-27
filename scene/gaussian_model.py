@@ -259,6 +259,33 @@ class GaussianModel(nn.Module):
             nn.Linear(feat_dim*2, (feat_dim+6+3*self.n_offsets)*2+1+1+1),
         ).cuda()
 
+        class FeatPredictModel(nn.Module):
+            def __init__(self, encoding_dim):
+                super(FeatPredictModel, self).__init__()
+                self.linear_1 = nn.Sequential(
+                    nn.Linear(encoding_dim, feat_dim),
+                    nn.ReLU(True)
+                )
+                self.linear_2 = nn.Sequential(
+                    nn.Linear(feat_dim, feat_dim)
+                )
+
+            def forward(self, x):
+                x1 = self.linear_1(x)
+                x2 = self.linear_2(x1)
+                return x1 + x2
+
+        self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim).cuda()
+
+        # class PriorEncoder(nn.Module):
+        #     def __init__(self, input_dim):
+        #         super(PriorEncoder, self).__init__()
+        #         self.linear_1 = nn.Sequential(
+        #             self.linear_1
+        #         )
+        #
+        # class HyperPrior()
+
         self.mlp_deform = nn.Sequential(
             nn.Linear(self.encoding_xyz.output_dim, feat_dim*2),
             nn.ReLU(True),
@@ -384,6 +411,10 @@ class GaussianModel(nn.Module):
     @property
     def get_grid_mlp(self):
         return self.mlp_grid
+
+    @property
+    def get_feat_predict(self):
+        return self.feat_predict
 
     @property
     def get_deform_mlp(self):
