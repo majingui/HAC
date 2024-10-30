@@ -148,6 +148,8 @@ class GaussianModel(nn.Module):
               log2_hashmap_size_2D, resolutions_list_2D,
               ste_binary, ste_multistep, add_noise)
 
+        self.hyper_divide_dim = 12
+
         self.feat_dim = feat_dim
         self.n_offsets = n_offsets
         self.voxel_size = voxel_size
@@ -256,7 +258,7 @@ class GaussianModel(nn.Module):
         self.mlp_grid = nn.Sequential(
             nn.Linear(self.encoding_xyz.output_dim, feat_dim*2),
             nn.ReLU(True),
-            nn.Linear(feat_dim*2, (feat_dim+6+3*self.n_offsets)*2+1+1+1),
+            nn.Linear(feat_dim*2, (feat_dim//self.hyper_divide_dim+6+3*self.n_offsets)*2+1+1+1),
         ).cuda()
 
         class FeatPredictModel(nn.Module):
@@ -277,14 +279,35 @@ class GaussianModel(nn.Module):
 
         self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim).cuda()
 
-        # class PriorEncoder(nn.Module):
-        #     def __init__(self, input_dim):
-        #         super(PriorEncoder, self).__init__()
-        #         self.linear_1 = nn.Sequential(
-        #             self.linear_1
-        #         )
-        #
-        # class HyperPrior()
+        class PriorEncoder(nn.Module):
+            def __init__(self, input_dim, hidden_dim, z_dim):
+                super(PriorEncoder, self).__init__()
+                self.fc1 = nn.Linear(input_dim, hidden_dim)
+                self.relu = nn.ReLU(True)
+                self.fc2 = nn.Linear(hidden_dim, z_dim)
+
+            def forward(self, x):
+                x = self.relu(self.fc1(x))
+                x = self.fc2(x)
+                return x
+
+        class PriorDecoder(nn.Module):
+            def __init__(self, z_dim, hidden_dim, feat_dim):
+                super(PriorDecoder, self).__init__()
+                self.fc1 = nn.Linear(z_dim, hidden_dim)
+                self.relu = nn.ReLU(True)
+                self.fc2_mean = nn.Linear(hidden_dim, feat_dim)
+                self.fc2_var = nn.Linear(hidden_dim, feat_dim)
+
+            def forward(self, x):
+                x = self.relu(self.fc1(x))
+                mean = self.fc2_mean(x)
+                var = self.fc2_var(x)
+                return mean, var
+
+        self.hyper_encoder = PriorEncoder(feat_dim, feat_dim * 2, feat_dim//self.hyper_divide_dim).cuda()
+
+        self.hyper_decoder = PriorDecoder(feat_dim//self.hyper_divide_dim, feat_dim * 2, feat_dim).cuda()
 
         self.mlp_deform = nn.Sequential(
             nn.Linear(self.encoding_xyz.output_dim, feat_dim*2),
@@ -314,6 +337,8 @@ class GaussianModel(nn.Module):
         for n, p in self.named_parameters():
             if 'mlp' in n and 'deform' not in n:
                 mlp_size += p.numel()*digit
+            elif 'feat_predict' in n or 'hyper' in n:
+                mlp_size += p.numel()*digit
         return mlp_size, mlp_size / 8 / 1024 / 1024
 
     def eval(self):
@@ -322,6 +347,11 @@ class GaussianModel(nn.Module):
         self.mlp_color.eval()
         self.encoding_xyz.eval()
         self.mlp_grid.eval()
+
+        self.feat_predict.eval()
+        self.hyper_encoder.eval()
+        self.hyper_decoder.eval()
+
         self.mlp_deform.eval()
 
         if self.use_feat_bank:
@@ -333,6 +363,11 @@ class GaussianModel(nn.Module):
         self.mlp_color.train()
         self.encoding_xyz.train()
         self.mlp_grid.train()
+
+        self.feat_predict.train()
+        self.hyper_encoder.train()
+        self.hyper_decoder.train()
+
         self.mlp_deform.train()
 
         if self.use_feat_bank:
@@ -415,6 +450,14 @@ class GaussianModel(nn.Module):
     @property
     def get_feat_predict(self):
         return self.feat_predict
+
+    @property
+    def get_hyper_encoder(self):
+        return self.hyper_encoder
+
+    @property
+    def get_hyper_decoder(self):
+        return self.hyper_decoder
 
     @property
     def get_deform_mlp(self):
@@ -544,6 +587,13 @@ class GaussianModel(nn.Module):
                 {'params': self.encoding_xyz.parameters(), 'lr': training_args.encoding_xyz_lr_init, "name": "encoding_xyz"},
                 {'params': self.mlp_grid.parameters(), 'lr': training_args.mlp_grid_lr_init, "name": "mlp_grid"},
 
+                {'params': self.feat_predict.parameters(), 'lr': training_args.mlp_feat_predict_lr_init,
+                 "name": "mlp_feat_predict"},
+                {'params': self.hyper_encoder.parameters(), 'lr': training_args.mlp_hyper_encoder_lr_init,
+                 "name": "mlp_hyper_encoder"},
+                {'params': self.hyper_decoder.parameters(), 'lr': training_args.mlp_hyper_decoder_lr_init,
+                 "name": "mlp_hyper_decoder"},
+
                 {'params': self.mlp_deform.parameters(), 'lr': training_args.mlp_deform_lr_init, "name": "mlp_deform"},
             ]
         else:
@@ -562,6 +612,10 @@ class GaussianModel(nn.Module):
 
                 {'params': self.encoding_xyz.parameters(), 'lr': training_args.encoding_xyz_lr_init, "name": "encoding_xyz"},
                 {'params': self.mlp_grid.parameters(), 'lr': training_args.mlp_grid_lr_init, "name": "mlp_grid"},
+
+                {'params': self.feat_predict.parameters(), 'lr': training_args.mlp_feat_predict_lr_init, "name": "mlp_feat_predict"},
+                {'params': self.hyper_encoder.parameters(), 'lr': training_args.mlp_hyper_encoder_lr_init, "name": "mlp_hyper_encoder"},
+                {'params': self.hyper_decoder.parameters(), 'lr': training_args.mlp_hyper_decoder_lr_init, "name": "mlp_hyper_decoder"},
 
                 {'params': self.mlp_deform.parameters(), 'lr': training_args.mlp_deform_lr_init, "name": "mlp_deform"},
             ]
@@ -613,6 +667,26 @@ class GaussianModel(nn.Module):
                                                          step_sub=0 if self.ste_binary else 10000,
                                                          )
 
+        self.mlp_feat_predict_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_feat_predict_lr_init,
+                                                         lr_final=training_args.mlp_feat_predict_lr_final,
+                                                         lr_delay_mult=training_args.mlp_feat_predict_lr_delay_mult,
+                                                         max_steps=training_args.mlp_feat_predict_lr_max_steps,
+                                                         step_sub=0 if self.ste_binary else 10000,
+                                                         )
+        self.mlp_hyper_encoder_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_hyper_encoder_lr_init,
+                                                         lr_final=training_args.mlp_hyper_encoder_lr_final,
+                                                         lr_delay_mult=training_args.mlp_hyper_encoder_lr_delay_mult,
+                                                         max_steps=training_args.mlp_hyper_encoder_lr_max_steps,
+                                                         step_sub=0 if self.ste_binary else 10000,
+                                                         )
+        self.mlp_hyper_decoder_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_hyper_decoder_lr_init,
+                                                         lr_final=training_args.mlp_hyper_decoder_lr_final,
+                                                         lr_delay_mult=training_args.mlp_hyper_decoder_lr_delay_mult,
+                                                         max_steps=training_args.mlp_hyper_decoder_lr_max_steps,
+                                                         step_sub=0 if self.ste_binary else 10000,
+                                                         )
+
+
         self.mlp_deform_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_deform_lr_init,
                                                     lr_final=training_args.mlp_deform_lr_final,
                                                     lr_delay_mult=training_args.mlp_deform_lr_delay_mult,
@@ -648,6 +722,17 @@ class GaussianModel(nn.Module):
             if param_group["name"] == "mlp_grid":
                 lr = self.mlp_grid_scheduler_args(iteration)
                 param_group['lr'] = lr
+
+            if param_group["name"] == "mlp_feat_predict":
+                lr = self.mlp_feat_predict_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_hyper_encoder":
+                lr = self.mlp_hyper_encoder_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_hyper_decoder":
+                lr = self.mlp_hyper_decoder_scheduler_args(iteration)
+                param_group['lr'] = lr
+
             if param_group["name"] == "mlp_deform":
                 lr = self.mlp_deform_scheduler_args(iteration)
                 param_group['lr'] = lr
@@ -1001,7 +1086,9 @@ class GaussianModel(nn.Module):
                 'encoding_xyz': self.encoding_xyz.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
-                'feat_predict': self.feat_predict.state_dict()
+                'feat_predict': self.feat_predict.state_dict(),
+                'hyper_encoder': self.hyper_encoder.state_dict(),
+                'hyper_decoder': self.hyper_decoder.state_dict(),
             }, path)
         else:
             torch.save({
@@ -1011,7 +1098,9 @@ class GaussianModel(nn.Module):
                 'encoding_xyz': self.encoding_xyz.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
-                'feat_predict': self.feat_predict.state_dict()
+                'feat_predict': self.feat_predict.state_dict(),
+                'hyper_encoder': self.hyper_encoder.state_dict(),
+                'hyper_decoder': self.hyper_decoder.state_dict(),
             }, path)
 
 
@@ -1026,6 +1115,8 @@ class GaussianModel(nn.Module):
         self.mlp_grid.load_state_dict(checkpoint['grid_mlp'])
         self.mlp_deform.load_state_dict(checkpoint['deform_mlp'])
         self.feat_predict.load_state_dict(checkpoint['feat_predict'])
+        self.hyper_encoder.load_state_dict(checkpoint['hyper_encoder'])
+        self.hyper_decoder.load_state_dict(checkpoint['hyper_decoder'])
 
     def contract_to_unisphere(self,
         x: torch.Tensor,
@@ -1054,7 +1145,7 @@ class GaussianModel(nn.Module):
             x = x / 4 + 0.5  # [-inf, inf] is at [0, 1]
             return x
 
-    @torch.no_grad()
+    @torch.no_grad() # tag_mjg
     def estimate_final_bits(self):
 
         Q_feat = 1
@@ -1071,18 +1162,23 @@ class GaussianModel(nn.Module):
         hash_embeddings = self.get_encoding_params()
 
         feat_context = self.calc_interp_feat(_anchor)  # [N_visible_anchor*0.2, 32]
-        mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-            torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim, self.feat_dim, 6, 6, 3*self.n_offsets, 3*self.n_offsets, 1, 1, 1], dim=-1)  # [N_visible_anchor, 32], [N_visible_anchor, 32]
+        z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+            torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim//self.hyper_divide_dim, self.feat_dim//self.hyper_divide_dim, 6, 6, 3*self.n_offsets, 3*self.n_offsets, 1, 1, 1], dim=-1)  # [N_visible_anchor, 32], [N_visible_anchor, 32]
         Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
         Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
         Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
+
+        z = self.hyper_encoder(_feat)
+        z = (STE_multistep.apply(z, Q_feat)).detach()
+        hyper_mean, hyper_var = self.hyper_decoder(z)
+
         _feat = (STE_multistep.apply(_feat, Q_feat)).detach()
         grid_scaling = (STE_multistep.apply(_scaling, Q_scaling)).detach()
         offsets = (STE_multistep.apply(_grid_offsets, Q_offsets.unsqueeze(1))).detach()
         offsets = offsets.view(-1, 3*self.n_offsets)
         mask_tmp = _mask.repeat(1, 1, 3).view(-1, 3*self.n_offsets)
 
-        bit_feat = self.entropy_gaussian.forward(_feat, mean, scale, Q_feat)
+        bit_feat = self.entropy_gaussian.forward(_feat, hyper_mean, hyper_var, Q_feat)
         bit_scaling = self.entropy_gaussian.forward(grid_scaling, mean_scaling, scale_scaling, Q_scaling)
         bit_offsets = self.entropy_gaussian.forward(offsets, mean_offsets, scale_offsets, Q_offsets)
         bit_offsets = bit_offsets * mask_tmp
@@ -1091,23 +1187,27 @@ class GaussianModel(nn.Module):
         bit_feat = torch.sum(bit_feat).item()
         bit_scaling = torch.sum(bit_scaling).item()
         bit_offsets = torch.sum(bit_offsets).item()
+
+        bit_hyper = self.entropy_gaussian.forward(z, z_mean, z_scale, Q_feat)
+        bit_hyper = torch.sum(bit_hyper).item()
         if self.ste_binary:
             bit_hash = get_binary_vxl_size((hash_embeddings+1)/2)[1].item()
         else:
             bit_hash = hash_embeddings.numel()*32
         bit_masks = get_binary_vxl_size(_mask)[1].item()
 
-        print(bit_anchor, bit_feat, bit_scaling, bit_offsets, bit_hash, bit_masks)
+        print(bit_anchor, bit_feat, bit_scaling, bit_offsets, bit_hash, bit_masks, bit_hyper)
 
         log_info = f"\nEstimated sizes in MB: " \
                    f"anchor {round(bit_anchor/bit2MB_scale, 4)}, " \
                    f"feat {round(bit_feat/bit2MB_scale, 4)}, " \
                    f"scaling {round(bit_scaling/bit2MB_scale, 4)}, " \
                    f"offsets {round(bit_offsets/bit2MB_scale, 4)}, " \
+                   f"hyper z {round(bit_hyper / bit2MB_scale, 4)}, " \
                    f"hash {round(bit_hash/bit2MB_scale, 4)}, " \
                    f"masks {round(bit_masks/bit2MB_scale, 4)}, " \
                    f"MLPs {round(self.get_mlp_size()[0]/bit2MB_scale, 4)}, " \
-                   f"Total {round((bit_anchor + bit_feat + bit_scaling + bit_offsets + bit_hash + bit_masks + self.get_mlp_size()[0])/bit2MB_scale, 4)}"
+                   f"Total {round((bit_anchor + bit_feat + bit_scaling + bit_offsets + bit_hash + bit_masks +bit_hyper + self.get_mlp_size()[0])/bit2MB_scale, 4)}"
 
         return log_info
 
@@ -1139,6 +1239,7 @@ class GaussianModel(nn.Module):
         bit_feat_list = []
         bit_scaling_list = []
         bit_offsets_list = []
+        bit_hyper_list = []
 
         hash_b_name = os.path.join(pre_path_name, 'hash.b')
         masks_b_name = os.path.join(pre_path_name, 'masks.b')
@@ -1151,6 +1252,7 @@ class GaussianModel(nn.Module):
             feat_b_name = os.path.join(pre_path_name, 'feat.b').replace('.b', f'_{s}.b')
             scaling_b_name = os.path.join(pre_path_name, 'scaling.b').replace('.b', f'_{s}.b')
             offsets_b_name = os.path.join(pre_path_name, 'offsets.b').replace('.b', f'_{s}.b')
+            hyper_b_name = os.path.join(pre_path_name, 'hyper.b').replace('.b', f'_{s}.b')
 
             Q_feat = 1
             Q_scaling = 0.001
@@ -1161,26 +1263,39 @@ class GaussianModel(nn.Module):
             # encode feat
             feat_context = self.calc_interp_feat(anchor_slice)  # [N_num, ?]
             # many [N_num, ?]
-            mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-                torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim, self.feat_dim, 6, 6, 3 * self.n_offsets, 3 * self.n_offsets, 1, 1, 1], dim=-1)
+            z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+                torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim//self.hyper_divide_dim, self.feat_dim//self.hyper_divide_dim, 6, 6, 3 * self.n_offsets, 3 * self.n_offsets, 1, 1, 1], dim=-1)
 
-            Q_feat_adj = Q_feat_adj.contiguous().repeat(1, mean.shape[-1]).view(-1)
+            Q_feat_adj_for_z = Q_feat_adj.contiguous().repeat(1, z_mean.shape[-1]).view(-1)
+            Q_feat_adj_for_feat = Q_feat_adj.contiguous().repeat(1, self.feat_dim).view(-1)
+
             Q_scaling_adj = Q_scaling_adj.contiguous().repeat(1, mean_scaling.shape[-1]).view(-1)
             Q_offsets_adj = Q_offsets_adj.contiguous().repeat(1, mean_offsets.shape[-1]).view(-1)
-            mean = mean.contiguous().view(-1)
+            z_mean = z_mean.contiguous().view(-1)
             mean_scaling = mean_scaling.contiguous().view(-1)
             mean_offsets = mean_offsets.contiguous().view(-1)
-            scale = torch.clamp(scale.contiguous().view(-1), min=1e-9)
+            z_scale = torch.clamp(z_scale.contiguous().view(-1), min=1e-9)
             scale_scaling = torch.clamp(scale_scaling.contiguous().view(-1), min=1e-9)
             scale_offsets = torch.clamp(scale_offsets.contiguous().view(-1), min=1e-9)
-            Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
+            Q_feat_for_z = Q_feat * (1 + torch.tanh(Q_feat_adj_for_z))
+            Q_feat_for_feat = Q_feat * (1 + torch.tanh(Q_feat_adj_for_feat))
             Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
             Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
 
             feat = _feat[N_start:N_end].view(-1)  # [N_num*32]
-            feat = STE_multistep.apply(feat, Q_feat, _feat.mean())
+
+            z = self.hyper_encoder(_feat[N_start:N_end]).view(-1)
+            z = STE_multistep.apply(z, Q_feat_for_z, z.mean())
+            # z需要解码后才能用于解码残差，所以需要先做量化，再decoder
+            bit_hyper = encoder_gaussian_chunk(z, z_mean, z_scale, Q_feat_for_z, file_name=hyper_b_name)
+            bit_hyper_list.append(bit_hyper)
+            hyper_mean, hyper_var = self.hyper_decoder(z.view(-1, self.feat_dim//self.hyper_divide_dim))
+            hyper_mean = hyper_mean.view(-1)
+            hyper_var = hyper_var.view(-1)
+
+            feat = STE_multistep.apply(feat, Q_feat_for_feat, _feat.mean())
             torch.cuda.synchronize(); t0 = time.time()
-            bit_feat = encoder_gaussian_chunk(feat, mean, scale, Q_feat, file_name=feat_b_name)
+            bit_feat = encoder_gaussian_chunk(feat, hyper_mean, hyper_var, Q_feat_for_feat, file_name=feat_b_name)
             torch.cuda.synchronize(); t_codec += time.time() - t0
             bit_feat_list.append(bit_feat)
 
@@ -1207,6 +1322,7 @@ class GaussianModel(nn.Module):
         bit_feat = sum(bit_feat_list)
         bit_scaling = sum(bit_scaling_list)
         bit_offsets = sum(bit_offsets_list)
+        bit_hyper = sum(bit_hyper_list)
 
         hash_embeddings = self.get_encoding_params()  # {-1, 1}
         if self.ste_binary:
@@ -1228,7 +1344,8 @@ class GaussianModel(nn.Module):
                    f"hash {round(bit_hash/bit2MB_scale, 4)}, " \
                    f"masks {round(bit_masks/bit2MB_scale, 4)}, " \
                    f"MLPs {round(self.get_mlp_size()[0]/bit2MB_scale, 4)}, " \
-                   f"Total {round((bit_anchor + bit_feat + bit_scaling + bit_offsets + bit_hash + bit_masks + self.get_mlp_size()[0])/bit2MB_scale, 4)}, " \
+                   f"hyper {round(bit_hyper / bit2MB_scale, 4)}, " \
+                   f"Total {round((bit_anchor + bit_feat + bit_scaling + bit_offsets + bit_hash + bit_hyper + bit_masks + self.get_mlp_size()[0])/bit2MB_scale, 4)}, " \
                    f"EncTime {round(t2 - t1, 4)}"
         return [self._anchor.shape[0], N, MAX_batch_size], log_info
 
@@ -1265,6 +1382,7 @@ class GaussianModel(nn.Module):
         Q_feat_list = []
         Q_scaling_list = []
         Q_offsets_list = []
+        # hyper_decoded_list = [] # 解码的时候z不需要保存
 
         for s in range(steps):
 
@@ -1275,6 +1393,7 @@ class GaussianModel(nn.Module):
             feat_b_name = os.path.join(pre_path_name, 'feat.b').replace('.b', f'_{s}.b')
             scaling_b_name = os.path.join(pre_path_name, 'scaling.b').replace('.b', f'_{s}.b')
             offsets_b_name = os.path.join(pre_path_name, 'offsets.b').replace('.b', f'_{s}.b')
+            hyper_b_name = os.path.join(pre_path_name, 'hyper.b').replace('.b', f'_{s}.b')
 
             Q_feat = 1
             Q_scaling = 0.001
@@ -1284,27 +1403,33 @@ class GaussianModel(nn.Module):
             anchor_sort = anchor_decoded[N_start:N_end]
             feat_context = self.calc_interp_feat(anchor_sort)  # [N_num, ?]
             # many [N_num, ?]
-            mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-                torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim, self.feat_dim, 6, 6, 3 * self.n_offsets, 3 * self.n_offsets, 1, 1, 1], dim=-1)
+            z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+                torch.split(self.get_grid_mlp(feat_context), split_size_or_sections=[self.feat_dim//self.hyper_divide_dim, self.feat_dim//self.hyper_divide_dim, 6, 6, 3 * self.n_offsets, 3 * self.n_offsets, 1, 1, 1], dim=-1)
 
             Q_feat_list.append(Q_feat * (1 + torch.tanh(Q_feat_adj.contiguous())))
             Q_scaling_list.append(Q_scaling * (1 + torch.tanh(Q_scaling_adj.contiguous())))
             Q_offsets_list.append(Q_offsets * (1 + torch.tanh(Q_offsets_adj.contiguous())))
 
-            Q_feat_adj = Q_feat_adj.contiguous().repeat(1, mean.shape[-1]).view(-1)
+            Q_feat_adj_for_z = Q_feat_adj.contiguous().repeat(1, z_mean.shape[-1]).view(-1)
+            Q_feat_adj_for_feat = Q_feat_adj.contiguous().repeat(1, self.feat_dim).view(-1)
             Q_scaling_adj = Q_scaling_adj.contiguous().repeat(1, mean_scaling.shape[-1]).view(-1)
             Q_offsets_adj = Q_offsets_adj.contiguous().repeat(1, mean_offsets.shape[-1]).view(-1)
-            mean = mean.contiguous().view(-1)
+            z_mean = z_mean.contiguous().view(-1)
             mean_scaling = mean_scaling.contiguous().view(-1)
             mean_offsets = mean_offsets.contiguous().view(-1)
-            scale = torch.clamp(scale.contiguous().view(-1), min=1e-9)
+            z_scale = torch.clamp(z_scale.contiguous().view(-1), min=1e-9)
             scale_scaling = torch.clamp(scale_scaling.contiguous().view(-1), min=1e-9)
             scale_offsets = torch.clamp(scale_offsets.contiguous().view(-1), min=1e-9)
-            Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
+            Q_feat_for_z = Q_feat * (1 + torch.tanh(Q_feat_adj_for_z))
+            Q_feat_for_feat = Q_feat * (1 + torch.tanh(Q_feat_adj_for_feat))
             Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
             Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
 
-            feat_decoded = decoder_gaussian_chunk(mean, scale, Q_feat, file_name=feat_b_name)
+            z_decoded = decoder_gaussian_chunk(z_mean, z_scale, Q_feat_for_z, file_name=hyper_b_name)
+            hyper_mean, hyper_var = self.get_hyper_decoder(z_decoded.view(-1, self.feat_dim//self.hyper_divide_dim))
+
+
+            feat_decoded = decoder_gaussian_chunk(hyper_mean.view(-1), hyper_var.view(-1), Q_feat_for_feat, file_name=feat_b_name)
             feat_decoded = feat_decoded.view(N_num, self.feat_dim)  # [N_num, 32]
             feat_decoded_list.append(feat_decoded)
 

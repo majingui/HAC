@@ -130,6 +130,22 @@ class OptimizationParams(ParamGroup):
         self.mlp_grid_lr_delay_mult = 0.01
         self.mlp_grid_lr_max_steps = 30_000
 
+        # 新加的三个模型的参数
+        self.mlp_feat_predict_lr_init = 0.005
+        self.mlp_feat_predict_lr_final = 0.00001
+        self.mlp_feat_predict_lr_delay_mult = 0.01
+        self.mlp_feat_predict_lr_max_steps = 30_000
+
+        self.mlp_hyper_encoder_lr_init = 0.005
+        self.mlp_hyper_encoder_lr_final = 0.00001
+        self.mlp_hyper_encoder_lr_delay_mult = 0.01
+        self.mlp_hyper_encoder_lr_max_steps = 30_000
+
+        self.mlp_hyper_decoder_lr_init = 0.005
+        self.mlp_hyper_decoder_lr_final = 0.00001
+        self.mlp_hyper_decoder_lr_delay_mult = 0.01
+        self.mlp_hyper_decoder_lr_max_steps = 30_000
+
         self.mlp_deform_lr_init = 0.005
         self.mlp_deform_lr_final = 0.0005
         self.mlp_deform_lr_delay_mult = 0.01

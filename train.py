@@ -168,16 +168,21 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
         bit_per_feat_param = render_pkg["bit_per_feat_param"]
         bit_per_scaling_param = render_pkg["bit_per_scaling_param"]
         bit_per_offsets_param = render_pkg["bit_per_offsets_param"]
+        bit_per_hypers_param = render_pkg["bit_per_hypers_param"]
 
         if iteration % 2000 == 0 and bit_per_param is not None:
 
             ttl_size_feat_MB = bit_per_feat_param.item() * gaussians.get_anchor.shape[0] * gaussians.feat_dim / bit2MB_scale
             ttl_size_scaling_MB = bit_per_scaling_param.item() * gaussians.get_anchor.shape[0] * 6 / bit2MB_scale
             ttl_size_offsets_MB = bit_per_offsets_param.item() * gaussians.get_anchor.shape[0] * 3 * gaussians.n_offsets / bit2MB_scale
-            ttl_size_MB = ttl_size_feat_MB + ttl_size_scaling_MB + ttl_size_offsets_MB
+            ttl_size_hyper_MB = bit_per_hypers_param.item() * gaussians.get_anchor.shape[0] * (gaussians.feat_dim // gaussians.hyper_divide_dim) / bit2MB_scale
+            ttl_size_MB = ttl_size_feat_MB + ttl_size_scaling_MB + ttl_size_offsets_MB + ttl_size_hyper_MB
 
             logger.info("\n----------------------------------------------------------------------------------------")
             logger.info("\n-----[ITER {}] bits info: bit_per_feat_param={}, anchor_num={}, ttl_size_feat_MB={}-----".format(iteration, bit_per_feat_param.item(), gaussians.get_anchor.shape[0], ttl_size_feat_MB))
+            logger.info(
+                "\n-----[ITER {}] bits info: bit_per_hypers_param={}, anchor_num={}, ttl_size_scaling_MB={}-----".format(
+                    iteration, bit_per_hypers_param.item(), gaussians.get_anchor.shape[0], ttl_size_hyper_MB))
             logger.info("\n-----[ITER {}] bits info: bit_per_scaling_param={}, anchor_num={}, ttl_size_scaling_MB={}-----".format(iteration, bit_per_scaling_param.item(), gaussians.get_anchor.shape[0], ttl_size_scaling_MB))
             logger.info("\n-----[ITER {}] bits info: bit_per_offsets_param={}, anchor_num={}, ttl_size_offsets_MB={}-----".format(iteration, bit_per_offsets_param.item(), gaussians.get_anchor.shape[0], ttl_size_offsets_MB))
             logger.info("\n-----[ITER {}] bits info: bit_per_param={}, anchor_num={}, ttl_size_MB={}-----".format(iteration, bit_per_param.item(), gaussians.get_anchor.shape[0], ttl_size_MB))
@@ -196,8 +201,8 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
         if bit_per_param is not None:
             _, bit_hash_grid, MB_hash_grid, _ = get_binary_vxl_size((gaussians.get_encoding_params()+1)/2)
-            denom = gaussians._anchor.shape[0]*(gaussians.feat_dim+6+3*gaussians.n_offsets)
-            loss = loss + args_param.lmbda * (bit_per_param + bit_hash_grid / denom)
+            denom = gaussians._anchor.shape[0]*(gaussians.feat_dim+6+3*gaussians.n_offsets + (gaussians.feat_dim//gaussians.hyper_divide_dim))
+            loss = loss + args_param.lmbda * (bit_per_param + bit_hash_grid / denom) # tag_mjg 这里需不需要加z
 
             loss = loss + 5e-4 * torch.mean(torch.sigmoid(gaussians._mask))
 
@@ -217,10 +222,11 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
             # Log and save
             torch.cuda.synchronize(); t_start_log = time.time()
+            # 这里是真正在编解码，会输出实际编解码的码流，任何改动到编码的都必须同步修改这里，否则只有训练过程估计的码流是可信的
             training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+                scene.save(iteration)# 这里是把没压缩的场景保存起来，包括anchor位置，各种属性，mask，以及所有mlp
             torch.cuda.synchronize(); t_end_log = time.time()
             t_log = t_end_log - t_start_log
             log_time_sub += t_log

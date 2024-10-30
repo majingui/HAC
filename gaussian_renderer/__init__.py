@@ -44,6 +44,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     bit_per_feat_param = None
     bit_per_scaling_param = None
     bit_per_offsets_param = None
+    bit_per_hypers_param = None
     Q_feat = 1
     Q_scaling = 0.001
     Q_offsets = 0.2
@@ -62,12 +63,17 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
         if step > 10000:
             feat_context = pc.calc_interp_feat(anchor)
-            mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-                torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim, pc.feat_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
+            z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+                torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim// pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
 
             Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
             Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
             Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
+
+            z = pc.get_hyper_encoder(feat)
+            z = z + torch.empty_like(z).uniform_(-0.5, 0.5) * Q_feat
+            hyper_mean, hyper_var = pc.get_hyper_decoder(z)
+
             feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
             grid_scaling = grid_scaling + torch.empty_like(grid_scaling).uniform_(-0.5, 0.5) * Q_scaling
             grid_offsets = grid_offsets + torch.empty_like(grid_offsets).uniform_(-0.5, 0.5) * Q_offsets.unsqueeze(1)
@@ -75,10 +81,15 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             choose_idx = torch.rand_like(anchor[:, 0]) <= 0.05
             choose_idx = choose_idx & mask_anchor_bool
             feat_chosen = feat[choose_idx]
+            z = z[choose_idx]
             grid_scaling_chosen = grid_scaling[choose_idx]
             grid_offsets_chosen = grid_offsets[choose_idx].view(-1, 3*pc.n_offsets)
-            mean = mean[choose_idx]
-            scale = scale[choose_idx]
+            z_mean = z_mean[choose_idx]
+            z_scale = z_scale[choose_idx]
+
+            hyper_mean = hyper_mean[choose_idx]
+            hyper_var = hyper_var[choose_idx]
+
             mean_scaling = mean_scaling[choose_idx]
             scale_scaling = scale_scaling[choose_idx]
             mean_offsets = mean_offsets[choose_idx]
@@ -87,21 +98,23 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             Q_scaling = Q_scaling[choose_idx]
             Q_offsets = Q_offsets[choose_idx]
             binary_grid_masks_chosen = binary_grid_masks[choose_idx].repeat(1, 1, 3).view(-1, 3*pc.n_offsets)
-            bit_feat = pc.entropy_gaussian.forward(feat_chosen, mean, scale, Q_feat, pc._anchor_feat.mean())
+            bit_feat = pc.entropy_gaussian.forward(feat_chosen, hyper_mean, hyper_var, Q_feat, pc._anchor_feat.mean())
             bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean())
             bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean())
+            bit_hypers = pc.entropy_gaussian.forward(z, z_mean, z_scale, Q_feat, z.mean())
             bit_offsets = bit_offsets * binary_grid_masks_chosen
+            bit_per_hypers_param = torch.sum(bit_hypers) / bit_hypers.numel() * mask_anchor_rate
             bit_per_feat_param = torch.sum(bit_feat) / bit_feat.numel() * mask_anchor_rate
             bit_per_scaling_param = torch.sum(bit_scaling) / bit_scaling.numel() * mask_anchor_rate
             bit_per_offsets_param = torch.sum(bit_offsets) / bit_offsets.numel() * mask_anchor_rate
-            bit_per_param = (torch.sum(bit_feat) + torch.sum(bit_scaling) + torch.sum(bit_offsets)) / \
-                            (bit_feat.numel() + bit_scaling.numel() + bit_offsets.numel()) * mask_anchor_rate
+            bit_per_param = (torch.sum(bit_feat) + torch.sum(bit_scaling) + torch.sum(bit_offsets) + torch.sum(bit_hypers)) / \
+                            (bit_feat.numel() + bit_scaling.numel() + bit_offsets.numel() + bit_hypers.numel()) * mask_anchor_rate
 
     elif not pc.decoded_version:
         torch.cuda.synchronize(); t1 = time.time()
         feat_context = pc.calc_interp_feat(anchor)
-        mean, scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-            torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim, pc.feat_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
+        z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+            torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim//pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
 
         Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
         Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
@@ -109,6 +122,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         feat = (STE_multistep.apply(feat, Q_feat, pc._anchor_feat.mean())).detach()
         grid_scaling = (STE_multistep.apply(grid_scaling, Q_scaling, pc.get_scaling.mean())).detach()
         grid_offsets = (STE_multistep.apply(grid_offsets, Q_offsets.unsqueeze(1), pc._offset.mean())).detach()
+        # 这里是否需要对z？ z是用来建模的不是属性
         torch.cuda.synchronize(); time_sub = time.time() - t1
 
     else:
@@ -174,7 +188,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     xyz = repeat_anchor + offsets  # [N_opacity_pos_gaussian, 3]
 
     if is_training:
-        return xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param
+        return xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param, bit_per_hypers_param
     else:
         return xyz, color, opacity, scaling, rot, time_sub
 
@@ -188,7 +202,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     is_training = pc.get_color_mlp.training
 
     if is_training:
-        xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
+        xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param, bit_per_hypers_param = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
     else:
         xyz, color, opacity, scaling, rot, time_sub = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
 
@@ -244,6 +258,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
                 "bit_per_feat_param": bit_per_feat_param,
                 "bit_per_scaling_param": bit_per_scaling_param,
                 "bit_per_offsets_param": bit_per_offsets_param,
+                "bit_per_hypers_param": bit_per_hypers_param
                 }
     else:
         return {"render": rendered_image,
