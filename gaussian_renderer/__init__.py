@@ -146,7 +146,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         feat = feat.squeeze(dim=-1)  # [N_visible_anchor, 32]
 
     if feat_context is not None:
-        full_feat = pc.get_feat_predict(feat_context) + feat
+        full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
     else:
         full_feat = feat
 
