@@ -125,8 +125,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         # 这里是否需要对z？ z是用来建模的不是属性
         torch.cuda.synchronize(); time_sub = time.time() - t1
 
-    else:
-        pass
+    else: # 改成predict后解码做测试的时候必须加这一行，让它下面能够走预测
+        feat_context = pc.calc_interp_feat(anchor)
 
     ob_view = anchor - viewpoint_camera.camera_center
     ob_dist = ob_view.norm(dim=1, keepdim=True)

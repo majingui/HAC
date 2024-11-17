@@ -148,7 +148,7 @@ class GaussianModel(nn.Module):
               log2_hashmap_size_2D, resolutions_list_2D,
               ste_binary, ste_multistep, add_noise)
 
-        self.hyper_divide_dim = 12
+        self.hyper_divide_dim = 8
 
         self.feat_dim = feat_dim
         self.n_offsets = n_offsets
