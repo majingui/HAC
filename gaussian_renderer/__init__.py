@@ -53,80 +53,80 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     feat_predict = pc.calc_interp_feat_predict(anchor)
     feat_context = None
 
-    if is_training:
-        # feat_context = pc.calc_interp_feat_predict(anchor)
-        if step > 3000 and step <= 10000:
-            # quantization
-            feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
-            grid_scaling = grid_scaling + torch.empty_like(grid_scaling).uniform_(-0.5, 0.5) * Q_scaling
-            grid_offsets = grid_offsets + torch.empty_like(grid_offsets).uniform_(-0.5, 0.5) * Q_offsets
-
-        if step == 10000:
-            pc.update_anchor_bound()
-
-        if step > 10000:
-            feat_context = pc.calc_interp_feat(anchor)
-            z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-                torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim// pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
-
-            Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
-            Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
-            Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
-
-            z = pc.get_hyper_encoder(feat)
-            z = z + torch.empty_like(z).uniform_(-0.5, 0.5) * Q_feat
-            hyper_mean, hyper_var = pc.get_hyper_decoder(z)
-
-            feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
-            grid_scaling = grid_scaling + torch.empty_like(grid_scaling).uniform_(-0.5, 0.5) * Q_scaling
-            grid_offsets = grid_offsets + torch.empty_like(grid_offsets).uniform_(-0.5, 0.5) * Q_offsets.unsqueeze(1)
-
-            choose_idx = torch.rand_like(anchor[:, 0]) <= 0.05
-            choose_idx = choose_idx & mask_anchor_bool
-            feat_chosen = feat[choose_idx]
-            z = z[choose_idx]
-            grid_scaling_chosen = grid_scaling[choose_idx]
-            grid_offsets_chosen = grid_offsets[choose_idx].view(-1, 3*pc.n_offsets)
-            z_mean = z_mean[choose_idx]
-            z_scale = z_scale[choose_idx]
-
-            hyper_mean = hyper_mean[choose_idx]
-            hyper_var = hyper_var[choose_idx]
-
-            mean_scaling = mean_scaling[choose_idx]
-            scale_scaling = scale_scaling[choose_idx]
-            mean_offsets = mean_offsets[choose_idx]
-            scale_offsets = scale_offsets[choose_idx]
-            Q_feat = Q_feat[choose_idx]
-            Q_scaling = Q_scaling[choose_idx]
-            Q_offsets = Q_offsets[choose_idx]
-            binary_grid_masks_chosen = binary_grid_masks[choose_idx].repeat(1, 1, 3).view(-1, 3*pc.n_offsets)
-            bit_feat = pc.entropy_gaussian.forward(feat_chosen, hyper_mean, hyper_var, Q_feat, pc._anchor_feat.mean())
-            bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean())
-            bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean())
-            bit_hypers = pc.entropy_gaussian.forward(z, z_mean, z_scale, Q_feat, z.mean())
-            bit_offsets = bit_offsets * binary_grid_masks_chosen
-            bit_per_hypers_param = torch.sum(bit_hypers) / bit_hypers.numel() * mask_anchor_rate
-            bit_per_feat_param = torch.sum(bit_feat) / bit_feat.numel() * mask_anchor_rate
-            bit_per_scaling_param = torch.sum(bit_scaling) / bit_scaling.numel() * mask_anchor_rate
-            bit_per_offsets_param = torch.sum(bit_offsets) / bit_offsets.numel() * mask_anchor_rate
-            bit_per_param = (torch.sum(bit_feat) + torch.sum(bit_scaling) + torch.sum(bit_offsets) + torch.sum(bit_hypers)) / \
-                            (bit_feat.numel() + bit_scaling.numel() + bit_offsets.numel() + bit_hypers.numel()) * mask_anchor_rate
-
-    elif not pc.decoded_version:
-        torch.cuda.synchronize(); t1 = time.time()
-        feat_context = pc.calc_interp_feat(anchor)
-        z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
-            torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim//pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
-
-        Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
-        Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
-        Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))  # [N_visible_anchor, 1]
-        feat = (STE_multistep.apply(feat, Q_feat, pc._anchor_feat.mean())).detach()
-        grid_scaling = (STE_multistep.apply(grid_scaling, Q_scaling, pc.get_scaling.mean())).detach()
-        grid_offsets = (STE_multistep.apply(grid_offsets, Q_offsets.unsqueeze(1), pc._offset.mean())).detach()
-        # 这里是否需要对z？ z是用来建模的不是属性
-        torch.cuda.synchronize(); time_sub = time.time() - t1
+    # if is_training:
+    #     # feat_context = pc.calc_interp_feat_predict(anchor)
+    #     if step > 3000 and step <= 10000:
+    #         # quantization
+    #         feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
+    #         grid_scaling = grid_scaling + torch.empty_like(grid_scaling).uniform_(-0.5, 0.5) * Q_scaling
+    #         grid_offsets = grid_offsets + torch.empty_like(grid_offsets).uniform_(-0.5, 0.5) * Q_offsets
+    #
+    #     if step == 10000:
+    #         pc.update_anchor_bound()
+    #
+    #     if step > 10000:
+    #         feat_context = pc.calc_interp_feat(anchor)
+    #         z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+    #             torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim// pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
+    #
+    #         Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
+    #         Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
+    #         Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
+    #
+    #         z = pc.get_hyper_encoder(feat)
+    #         z = z + torch.empty_like(z).uniform_(-0.5, 0.5) * Q_feat
+    #         hyper_mean, hyper_var = pc.get_hyper_decoder(z)
+    #
+    #         feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
+    #         grid_scaling = grid_scaling + torch.empty_like(grid_scaling).uniform_(-0.5, 0.5) * Q_scaling
+    #         grid_offsets = grid_offsets + torch.empty_like(grid_offsets).uniform_(-0.5, 0.5) * Q_offsets.unsqueeze(1)
+    #
+    #         choose_idx = torch.rand_like(anchor[:, 0]) <= 0.05
+    #         choose_idx = choose_idx & mask_anchor_bool
+    #         feat_chosen = feat[choose_idx]
+    #         z = z[choose_idx]
+    #         grid_scaling_chosen = grid_scaling[choose_idx]
+    #         grid_offsets_chosen = grid_offsets[choose_idx].view(-1, 3*pc.n_offsets)
+    #         z_mean = z_mean[choose_idx]
+    #         z_scale = z_scale[choose_idx]
+    #
+    #         hyper_mean = hyper_mean[choose_idx]
+    #         hyper_var = hyper_var[choose_idx]
+    #
+    #         mean_scaling = mean_scaling[choose_idx]
+    #         scale_scaling = scale_scaling[choose_idx]
+    #         mean_offsets = mean_offsets[choose_idx]
+    #         scale_offsets = scale_offsets[choose_idx]
+    #         Q_feat = Q_feat[choose_idx]
+    #         Q_scaling = Q_scaling[choose_idx]
+    #         Q_offsets = Q_offsets[choose_idx]
+    #         binary_grid_masks_chosen = binary_grid_masks[choose_idx].repeat(1, 1, 3).view(-1, 3*pc.n_offsets)
+    #         bit_feat = pc.entropy_gaussian.forward(feat_chosen, hyper_mean, hyper_var, Q_feat, pc._anchor_feat.mean())
+    #         bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean())
+    #         bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean())
+    #         bit_hypers = pc.entropy_gaussian.forward(z, z_mean, z_scale, Q_feat, z.mean())
+    #         bit_offsets = bit_offsets * binary_grid_masks_chosen
+    #         bit_per_hypers_param = torch.sum(bit_hypers) / bit_hypers.numel() * mask_anchor_rate
+    #         bit_per_feat_param = torch.sum(bit_feat) / bit_feat.numel() * mask_anchor_rate
+    #         bit_per_scaling_param = torch.sum(bit_scaling) / bit_scaling.numel() * mask_anchor_rate
+    #         bit_per_offsets_param = torch.sum(bit_offsets) / bit_offsets.numel() * mask_anchor_rate
+    #         bit_per_param = (torch.sum(bit_feat) + torch.sum(bit_scaling) + torch.sum(bit_offsets) + torch.sum(bit_hypers)) / \
+    #                         (bit_feat.numel() + bit_scaling.numel() + bit_offsets.numel() + bit_hypers.numel()) * mask_anchor_rate
+    #
+    # elif not pc.decoded_version:
+    #     torch.cuda.synchronize(); t1 = time.time()
+    #     feat_context = pc.calc_interp_feat(anchor)
+    #     z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
+    #         torch.split(pc.get_grid_mlp(feat_context), split_size_or_sections=[pc.feat_dim//pc.hyper_divide_dim, pc.feat_dim//pc.hyper_divide_dim, 6, 6, 3*pc.n_offsets, 3*pc.n_offsets, 1, 1, 1], dim=-1)
+    #
+    #     Q_feat = Q_feat * (1 + torch.tanh(Q_feat_adj))
+    #     Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
+    #     Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))  # [N_visible_anchor, 1]
+    #     feat = (STE_multistep.apply(feat, Q_feat, pc._anchor_feat.mean())).detach()
+    #     grid_scaling = (STE_multistep.apply(grid_scaling, Q_scaling, pc.get_scaling.mean())).detach()
+    #     grid_offsets = (STE_multistep.apply(grid_offsets, Q_offsets.unsqueeze(1), pc._offset.mean())).detach()
+    #     # 这里是否需要对z？ z是用来建模的不是属性
+    #     torch.cuda.synchronize(); time_sub = time.time() - t1
 
     # else: # 改成predict后解码做测试的时候必须加这一行，让它下面能够走预测
     #     feat_context = pc.calc_interp_feat(anchor)
@@ -148,20 +148,21 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             feat[:, ::1, :1]*bank_weight[:, :, 2:]
         feat = feat.squeeze(dim=-1)  # [N_visible_anchor, 32]
 
-    if feat_predict is not None:
-        # full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
-        if is_training:
-            if step <= 10000:
-                if random() > 0.5:
-                    full_feat = pc.get_feat_predict(feat_predict)
-                else:
-                    full_feat = pc.get_feat_predict(feat_predict) + feat
-            else:
-                full_feat = pc.get_feat_predict(feat_predict) + feat
-        else:
-            full_feat = pc.get_feat_predict(feat_predict) + feat
-    else: # 不可能走这里了
-        full_feat = feat
+    if step < 10000:
+        full_feat = pc.get_feat_predict(feat_predict)
+    else:
+        full_feat = pc.get_feat_predict(feat_predict) + feat
+
+    # if is_training:
+    #     if step <= 10000:
+    #         if random() > 0.5:
+    #             full_feat = pc.get_feat_predict(feat_predict)
+    #         else:
+    #             full_feat = pc.get_feat_predict(feat_predict) + feat
+    #     else:
+    #         full_feat = pc.get_feat_predict(feat_predict) + feat
+    # else:
+    #     full_feat = pc.get_feat_predict(feat_predict) + feat
 
     cat_local_view = torch.cat([full_feat, ob_view, ob_dist], dim=1)  # [N_visible_anchor, 32+3+1]
 
@@ -212,7 +213,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     Background tensor (bg_color) must be on GPU!
     """
-    is_training = pc.get_color_mlp.training
+    is_training = pc.get_color_mlp.training # 这优点危险，万一它被冻结了怎么办，不过这样确实避免了训练时测试的问题
 
     if is_training:
         xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param, bit_per_hypers_param = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)

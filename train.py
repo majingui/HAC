@@ -119,6 +119,9 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
     torch.cuda.synchronize(); t_start = time.time()
     log_time_sub = 0
     for iteration in range(first_iter, opt.iterations + 1):
+        if iteration >= 10000:
+            gaussians.stop_gradient_for_add()
+
         # network gui not available in scaffold-gs yet
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -296,24 +299,24 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
     if wandb is not None:
         wandb.log({"train_l1_loss":Ll1, 'train_total_loss':loss, })
     # Report test and samples of training set
-    if iteration in testing_iterations:
+    if iteration % 2000 == 0:
         scene.gaussians.eval()
 
         if 1:
-            if iteration == testing_iterations[-1]:
-                with torch.no_grad():
-                    log_info = scene.gaussians.estimate_final_bits()
-                    logger.info(log_info)
-                if run_codec:  # conduct encoding and decoding
-                    with torch.no_grad():
-                        bit_stream_path = os.path.join(pre_path_name, 'bitstreams')
-                        os.makedirs(bit_stream_path, exist_ok=True)
-                        # conduct encoding
-                        patched_infos, log_info = scene.gaussians.conduct_encoding(pre_path_name=bit_stream_path)
-                        logger.info(log_info)
-                        # conduct decoding
-                        log_info = scene.gaussians.conduct_decoding(pre_path_name=bit_stream_path, patched_infos=patched_infos)
-                        logger.info(log_info)
+            # if iteration == testing_iterations[-1]:
+            #     with torch.no_grad():
+            #         log_info = scene.gaussians.estimate_final_bits()
+            #         logger.info(log_info)
+            #     if run_codec:  # conduct encoding and decoding
+            #         with torch.no_grad():
+            #             bit_stream_path = os.path.join(pre_path_name, 'bitstreams')
+            #             os.makedirs(bit_stream_path, exist_ok=True)
+            #             # conduct encoding
+            #             patched_infos, log_info = scene.gaussians.conduct_encoding(pre_path_name=bit_stream_path)
+            #             logger.info(log_info)
+            #             # conduct decoding
+            #             log_info = scene.gaussians.conduct_decoding(pre_path_name=bit_stream_path, patched_infos=patched_infos)
+            #             logger.info(log_info)
             torch.cuda.empty_cache()
             validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                                   {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
@@ -337,7 +340,7 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                         torch.cuda.synchronize(); t_start = time.time()
                         voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, *renderArgs)
                         # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
-                        render_output = renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)
+                        render_output = renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask,step = iteration) # 让测试也能够感知到iter
                         image = torch.clamp(render_output["render"], 0.0, 1.0)
                         time_sub = render_output["time_sub"]
                         torch.cuda.synchronize(); t_end = time.time()

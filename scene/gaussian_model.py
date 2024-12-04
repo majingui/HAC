@@ -332,6 +332,12 @@ class GaussianModel(nn.Module):
 
         self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
 
+    def stop_gradient_for_add(self):
+        for param in self.feat_predict.parameters():
+            param.requires_grad = False
+        for param in self.encoding_xyz_predict.parameters():
+            param.requires_grad = False
+
     def get_encoding_params(self):
         params = []
         if self.use_2D:
