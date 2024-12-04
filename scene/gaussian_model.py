@@ -217,8 +217,22 @@ class GaussianModel(nn.Module):
                 Q=Q,
             ).cuda()
 
+        self.encoding_xyz_predict = mix_3D2D_encoding(
+            n_features=n_features_per_level,
+            resolutions_list=resolutions_list,
+            log2_hashmap_size=log2_hashmap_size,
+            resolutions_list_2D=resolutions_list_2D,
+            log2_hashmap_size_2D=log2_hashmap_size_2D,
+            ste_binary=ste_binary,
+            ste_multistep=ste_multistep,
+            add_noise=add_noise,
+            Q=Q,
+        ).cuda()
+
         encoding_params_num = 0
         for n, p in self.encoding_xyz.named_parameters():
+            encoding_params_num += p.numel()
+        for n, p in self.encoding_xyz_predict.named_parameters():
             encoding_params_num += p.numel()
         encoding_MB = encoding_params_num / 8 / 1024 / 1024
         if not ste_binary: encoding_MB *= 32
@@ -277,7 +291,7 @@ class GaussianModel(nn.Module):
                 x2 = self.linear_2(x1)
                 return x1 + x2
 
-        self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim + self.feat_dim).cuda()
+        self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim).cuda()
 
         class PriorEncoder(nn.Module):
             def __init__(self, input_dim, hidden_dim, z_dim):
@@ -332,6 +346,20 @@ class GaussianModel(nn.Module):
             params = STE_binary.apply(params)
         return params
 
+    def get_encoding_params_predict(self):
+        params = []
+        if self.use_2D:
+            params.append(self.encoding_xyz_predict.encoding_xyz.params)
+            params.append(self.encoding_xyz_predict.encoding_xy.params)
+            params.append(self.encoding_xyz_predict.encoding_xz.params)
+            params.append(self.encoding_xyz_predict.encoding_yz.params)
+        else:
+            params.append(self.encoding_xyz_predict.params)
+        params = torch.cat(params, dim=0)
+        if self.ste_binary:
+            params = STE_binary.apply(params)
+        return params
+
     def get_mlp_size(self, digit=32):
         mlp_size = 0
         for n, p in self.named_parameters():
@@ -346,6 +374,7 @@ class GaussianModel(nn.Module):
         self.mlp_cov.eval()
         self.mlp_color.eval()
         self.encoding_xyz.eval()
+        self.encoding_xyz_predict.eval()
         self.mlp_grid.eval()
 
         self.feat_predict.eval()
@@ -362,6 +391,7 @@ class GaussianModel(nn.Module):
         self.mlp_cov.train()
         self.mlp_color.train()
         self.encoding_xyz.train()
+        self.encoding_xyz_predict.train()
         self.mlp_grid.train()
 
         self.feat_predict.train()
@@ -499,6 +529,14 @@ class GaussianModel(nn.Module):
         features = self.encoding_xyz(x)  # [N, 4*12]
         return features
 
+    def calc_interp_feat_predict(self, x):
+        # x: [N, 3]
+        assert len(x.shape) == 2 and x.shape[1] == 3
+        assert torch.abs(self.x_bound_min - torch.zeros(size=[1, 3], device='cuda')).mean() > 0
+        x = (x - self.x_bound_min) / (self.x_bound_max - self.x_bound_min)  # to [0, 1]
+        features = self.encoding_xyz_predict(x)  # [N, 4*12]
+        return features
+
     @property
     def set_anchor(self, new_anchor):
         assert self._anchor.shape == new_anchor.shape
@@ -585,6 +623,8 @@ class GaussianModel(nn.Module):
                 {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
 
                 {'params': self.encoding_xyz.parameters(), 'lr': training_args.encoding_xyz_lr_init, "name": "encoding_xyz"},
+                {'params': self.encoding_xyz_predict.parameters(), 'lr': training_args.encoding_xyz_lr_init,
+                 "name": "encoding_xyz_predict"},
                 {'params': self.mlp_grid.parameters(), 'lr': training_args.mlp_grid_lr_init, "name": "mlp_grid"},
 
                 {'params': self.feat_predict.parameters(), 'lr': training_args.mlp_feat_predict_lr_init,
@@ -611,6 +651,8 @@ class GaussianModel(nn.Module):
                 {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
 
                 {'params': self.encoding_xyz.parameters(), 'lr': training_args.encoding_xyz_lr_init, "name": "encoding_xyz"},
+                {'params': self.encoding_xyz_predict.parameters(), 'lr': training_args.encoding_xyz_lr_init,
+                 "name": "encoding_xyz_predict"},
                 {'params': self.mlp_grid.parameters(), 'lr': training_args.mlp_grid_lr_init, "name": "mlp_grid"},
 
                 {'params': self.feat_predict.parameters(), 'lr': training_args.mlp_feat_predict_lr_init, "name": "mlp_feat_predict"},
@@ -658,6 +700,12 @@ class GaussianModel(nn.Module):
                                                     lr_final=training_args.encoding_xyz_lr_final,
                                                     lr_delay_mult=training_args.encoding_xyz_lr_delay_mult,
                                                     max_steps=training_args.encoding_xyz_lr_max_steps,
+                                                             step_sub=0 if self.ste_binary else 10000,
+                                                             )
+        self.encoding_xyz_predict_scheduler_args = get_expon_lr_func(lr_init=training_args.encoding_xyz_lr_init,
+                                                             lr_final=training_args.encoding_xyz_lr_final,
+                                                             lr_delay_mult=training_args.encoding_xyz_lr_delay_mult,
+                                                             max_steps=training_args.encoding_xyz_lr_max_steps,
                                                              step_sub=0 if self.ste_binary else 10000,
                                                              )
         self.mlp_grid_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_grid_lr_init,
@@ -718,6 +766,9 @@ class GaussianModel(nn.Module):
                 param_group['lr'] = lr
             if param_group["name"] == "encoding_xyz":
                 lr = self.encoding_xyz_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "encoding_xyz_predict":
+                lr = self.encoding_xyz_predict_scheduler_args(iteration)
                 param_group['lr'] = lr
             if param_group["name"] == "mlp_grid":
                 lr = self.mlp_grid_scheduler_args(iteration)
@@ -1084,6 +1135,7 @@ class GaussianModel(nn.Module):
                 'cov_mlp': self.mlp_cov.state_dict(),
                 'color_mlp': self.mlp_color.state_dict(),
                 'encoding_xyz': self.encoding_xyz.state_dict(),
+                'encoding_xyz_predict': self.encoding_xyz_predict.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
                 'feat_predict': self.feat_predict.state_dict(),
@@ -1096,6 +1148,7 @@ class GaussianModel(nn.Module):
                 'cov_mlp': self.mlp_cov.state_dict(),
                 'color_mlp': self.mlp_color.state_dict(),
                 'encoding_xyz': self.encoding_xyz.state_dict(),
+                'encoding_xyz_predict': self.encoding_xyz_predict.state_dict(),
                 'grid_mlp': self.mlp_grid.state_dict(),
                 'deform_mlp': self.mlp_deform.state_dict(),
                 'feat_predict': self.feat_predict.state_dict(),
@@ -1112,6 +1165,7 @@ class GaussianModel(nn.Module):
         if self.use_feat_bank:
             self.mlp_feature_bank.load_state_dict(checkpoint['mlp_feature_bank'])
         self.encoding_xyz.load_state_dict(checkpoint['encoding_xyz'])
+        self.encoding_xyz_predict.load_state_dict(checkpoint['encoding_xyz_predict'])
         self.mlp_grid.load_state_dict(checkpoint['grid_mlp'])
         self.mlp_deform.load_state_dict(checkpoint['deform_mlp'])
         self.feat_predict.load_state_dict(checkpoint['feat_predict'])
@@ -1160,6 +1214,7 @@ class GaussianModel(nn.Module):
         _scaling = self.get_scaling[mask_anchor]
         _mask = self.get_mask[mask_anchor]
         hash_embeddings = self.get_encoding_params()
+        hash_embeddings_predict = self.get_encoding_params_predict()
 
         feat_context = self.calc_interp_feat(_anchor)  # [N_visible_anchor*0.2, 32]
         z_mean, z_scale, mean_scaling, scale_scaling, mean_offsets, scale_offsets, Q_feat_adj, Q_scaling_adj, Q_offsets_adj = \
@@ -1192,8 +1247,10 @@ class GaussianModel(nn.Module):
         bit_hyper = torch.sum(bit_hyper).item()
         if self.ste_binary:
             bit_hash = get_binary_vxl_size((hash_embeddings+1)/2)[1].item()
+            bit_hash = bit_hash + get_binary_vxl_size((hash_embeddings_predict+1)/2)[1].item()
         else:
             bit_hash = hash_embeddings.numel()*32
+            bit_hash = bit_hash + hash_embeddings_predict.numel()*32
         bit_masks = get_binary_vxl_size(_mask)[1].item()
 
         print(bit_anchor, bit_feat, bit_scaling, bit_offsets, bit_hash, bit_masks, bit_hyper)
@@ -1242,6 +1299,7 @@ class GaussianModel(nn.Module):
         bit_hyper_list = []
 
         hash_b_name = os.path.join(pre_path_name, 'hash.b')
+        hash_predict_b_name = os.path.join(pre_path_name, 'hash_predict.b')
         masks_b_name = os.path.join(pre_path_name, 'masks.b')
 
         for s in range(steps):
@@ -1325,10 +1383,12 @@ class GaussianModel(nn.Module):
         bit_hyper = sum(bit_hyper_list)
 
         hash_embeddings = self.get_encoding_params()  # {-1, 1}
+        hash_embeddings_predict = self.get_encoding_params_predict()  # {-1, 1}
         if self.ste_binary:
             bit_hash = encoder(((hash_embeddings.view(-1) + 1) / 2), file_name=hash_b_name)
+            bit_hash = bit_hash + encoder(((hash_embeddings_predict.view(-1) + 1) / 2), file_name=hash_predict_b_name)
         else:
-            bit_hash = hash_embeddings.numel()*32
+            bit_hash = hash_embeddings.numel()*32 + hash_embeddings_predict.numel()*32
 
         bit_masks = encoder(_mask, file_name=masks_b_name)
 
@@ -1362,6 +1422,7 @@ class GaussianModel(nn.Module):
         offsets_decoded_list = []
 
         hash_b_name = os.path.join(pre_path_name, 'hash.b')
+        hash_predict_b_name = os.path.join(pre_path_name, 'hash_predict.b')
         masks_b_name = os.path.join(pre_path_name, 'masks.b')
 
         masks_decoded = decoder(N*self.n_offsets, masks_b_name)  # {0, 1}
@@ -1372,6 +1433,11 @@ class GaussianModel(nn.Module):
             hash_embeddings = decoder(N_hash, hash_b_name)  # {0, 1}
             hash_embeddings = (hash_embeddings * 2 - 1).to(torch.float32)
             hash_embeddings = hash_embeddings.view(-1, self.n_features_per_level)
+
+            N_hash_predict = torch.zeros_like(self.get_encoding_params_predict()).numel()
+            hash_embeddings_predict = decoder(N_hash_predict, hash_predict_b_name)  # {0, 1}
+            hash_embeddings_predict = (hash_embeddings_predict * 2 - 1).to(torch.float32)
+            hash_embeddings_predict = hash_embeddings_predict.view(-1, self.n_features_per_level)
 
         # anchor_decoded = torch.load(os.path.join(pre_path_name, 'anchor.pkl')).cuda()
         _quantized_v_decoded = np.load(os.path.join(pre_path_name, '_quantized_v.npy')).astype(np.int32)
@@ -1492,8 +1558,16 @@ class GaussianModel(nn.Module):
                 self.encoding_xyz.encoding_xy.params = nn.Parameter(hash_embeddings[len_3D:len_3D+len_2D])
                 self.encoding_xyz.encoding_xz.params = nn.Parameter(hash_embeddings[len_3D+len_2D:len_3D+len_2D*2])
                 self.encoding_xyz.encoding_yz.params = nn.Parameter(hash_embeddings[len_3D+len_2D*2:len_3D+len_2D*3])
+
+                self.encoding_xyz_predict.encoding_xyz.params = nn.Parameter(hash_embeddings_predict[0:len_3D])
+                self.encoding_xyz_predict.encoding_xy.params = nn.Parameter(hash_embeddings_predict[len_3D:len_3D + len_2D])
+                self.encoding_xyz_predict.encoding_xz.params = nn.Parameter(
+                    hash_embeddings_predict[len_3D + len_2D:len_3D + len_2D * 2])
+                self.encoding_xyz_predict.encoding_yz.params = nn.Parameter(
+                    hash_embeddings_predict[len_3D + len_2D * 2:len_3D + len_2D * 3])
             else:
                 self.encoding_xyz.params = nn.Parameter(hash_embeddings)
+                self.encoding_xyz_predict.params = nn.Parameter(hash_embeddings_predict)
 
         print('Parameters are successfully replaced by decoded ones!')
 

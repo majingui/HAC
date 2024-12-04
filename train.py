@@ -201,6 +201,8 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
         if bit_per_param is not None:
             _, bit_hash_grid, MB_hash_grid, _ = get_binary_vxl_size((gaussians.get_encoding_params()+1)/2)
+            _predict, bit_hash_grid_predict, MB_hash_grid_predict, _predict = get_binary_vxl_size((gaussians.get_encoding_params_predict() + 1) / 2)
+            bit_hash_grid = bit_hash_grid + bit_hash_grid_predict
             denom = gaussians._anchor.shape[0]*(gaussians.feat_dim+6+3*gaussians.n_offsets + (gaussians.feat_dim//gaussians.hyper_divide_dim))
             loss = loss + args_param.lmbda * (bit_per_param + bit_hash_grid / denom) # tag_mjg 这里需不需要加z
 
@@ -599,7 +601,7 @@ if __name__ == "__main__":
     parser.add_argument('--warmup', action='store_true', default=False)
     parser.add_argument('--use_wandb', action='store_true', default=False)
     # parser.add_argument("--test_iterations", nargs="+", type=int, default=[11_000, 15_000, 20_000, 25_000, 29_000, 30_000])
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[10_000,20_000,30_000])
     # parser.add_argument("--save_iterations", nargs="+", type=int, default=[11_000, 15_000, 20_000, 25_000, 29_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")

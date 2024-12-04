@@ -10,6 +10,7 @@
 #
 import os.path
 import time
+from random import random
 
 import torch
 import torch.nn as nn
@@ -49,9 +50,11 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     Q_scaling = 0.001
     Q_offsets = 0.2
 
+    feat_predict = pc.calc_interp_feat_predict(anchor)
     feat_context = None
 
     if is_training:
+        # feat_context = pc.calc_interp_feat_predict(anchor)
         if step > 3000 and step <= 10000:
             # quantization
             feat = feat + torch.empty_like(feat).uniform_(-0.5, 0.5) * Q_feat
@@ -125,8 +128,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         # 这里是否需要对z？ z是用来建模的不是属性
         torch.cuda.synchronize(); time_sub = time.time() - t1
 
-    else: # 改成predict后解码做测试的时候必须加这一行，让它下面能够走预测
-        feat_context = pc.calc_interp_feat(anchor)
+    # else: # 改成predict后解码做测试的时候必须加这一行，让它下面能够走预测
+    #     feat_context = pc.calc_interp_feat(anchor)
 
     ob_view = anchor - viewpoint_camera.camera_center
     ob_dist = ob_view.norm(dim=1, keepdim=True)
@@ -145,9 +148,19 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             feat[:, ::1, :1]*bank_weight[:, :, 2:]
         feat = feat.squeeze(dim=-1)  # [N_visible_anchor, 32]
 
-    if feat_context is not None:
-        full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
-    else:
+    if feat_predict is not None:
+        # full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
+        if is_training:
+            if step <= 10000:
+                if random() > 0.5:
+                    full_feat = pc.get_feat_predict(feat_predict)
+                else:
+                    full_feat = pc.get_feat_predict(feat_predict) + feat
+            else:
+                full_feat = pc.get_feat_predict(feat_predict) + feat
+        else:
+            full_feat = pc.get_feat_predict(feat_predict) + feat
+    else: # 不可能走这里了
         full_feat = feat
 
     cat_local_view = torch.cat([full_feat, ob_view, ob_dist], dim=1)  # [N_visible_anchor, 32+3+1]
