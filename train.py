@@ -411,7 +411,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
         torch.cuda.synchronize(); t_start = time.time()
         voxel_visible_mask = prefilter_voxel(view, gaussians, pipeline, background)
-        render_pkg = render(view, gaussians, pipeline, background, visible_mask=voxel_visible_mask)
+        render_pkg = render(view, gaussians, pipeline, background, visible_mask=voxel_visible_mask, step=iteration) # 这个参数也要传，不然最终测试结果不一样
         torch.cuda.synchronize(); t_end = time.time()
 
         t_list.append(t_end - t_start)
