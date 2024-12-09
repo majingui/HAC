@@ -823,6 +823,18 @@ class GaussianModel(nn.Module):
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
+    def resume_gradient_for_add(self):
+        for param in self.feat_predict.parameters():
+            param.requires_grad = True
+        for param in self.encoding_xyz_predict.parameters():
+            param.requires_grad = True
+
+    def stop_gradient_for_add(self):
+        for param in self.feat_predict.parameters():
+            param.requires_grad = False
+        for param in self.encoding_xyz_predict.parameters():
+            param.requires_grad = False
+
     def load_ply_sparse_gaussian(self, path):
         plydata = PlyData.read(path)
 

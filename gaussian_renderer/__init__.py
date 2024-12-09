@@ -151,11 +151,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     if feat_predict is not None:
         # full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
         if is_training:
-            if step <= 10000:
-                if random() > 0.5:
-                    full_feat = pc.get_feat_predict(feat_predict)
-                else:
-                    full_feat = pc.get_feat_predict(feat_predict) + feat
+            if step < 1200:
+                full_feat = pc.get_feat_predict(feat_predict)
             else:
                 full_feat = pc.get_feat_predict(feat_predict) + feat
         else:

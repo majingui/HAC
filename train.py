@@ -119,6 +119,12 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
     torch.cuda.synchronize(); t_start = time.time()
     log_time_sub = 0
     for iteration in range(first_iter, opt.iterations + 1):
+
+        if iteration == 1200:
+            gaussians.stop_gradient_for_add()
+        if iteration == 30_000:
+            gaussians.resume_gradient_for_add()
+
         # network gui not available in scaffold-gs yet
         if network_gui.conn == None:
             network_gui.try_connect()
