@@ -151,12 +151,14 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     if feat_predict is not None:
         # full_feat = pc.get_feat_predict(torch.cat((feat_context, feat), dim=1))
         if is_training:
-            if step < 1200:
-                full_feat = pc.get_feat_predict(feat_predict)
+            # full_feat = pc.get_feat_predict(torch.concat([feat_predict, feat], dim=1))
+            if step < 8000:
+                # full_feat = feat
+                full_feat = pc.get_feat_predict(torch.concat([torch.zeros_like(feat_predict),feat], dim=1))
             else:
-                full_feat = pc.get_feat_predict(feat_predict) + feat
+                full_feat = pc.get_feat_predict(torch.concat([feat_predict,feat], dim=1))
         else:
-            full_feat = pc.get_feat_predict(feat_predict) + feat
+            full_feat = pc.get_feat_predict(torch.concat([feat_predict,feat], dim=1))
     else: # 不可能走这里了
         full_feat = feat
 

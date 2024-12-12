@@ -291,7 +291,7 @@ class GaussianModel(nn.Module):
                 x2 = self.linear_2(x1)
                 return x1 + x2
 
-        self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim).cuda()
+        self.feat_predict = FeatPredictModel(self.encoding_xyz.output_dim + self.feat_dim).cuda()
 
         class PriorEncoder(nn.Module):
             def __init__(self, input_dim, hidden_dim, z_dim):
